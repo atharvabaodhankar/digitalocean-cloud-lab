@@ -11,10 +11,47 @@ const client = redis.createClient({
   url: "redis://redis:6379"
 });
 
-client.connect();
+client.connect().catch(err => console.error("Redis client connection failed:", err));
+
+// Track deploy/startup time
+const deployTime = new Date();
+const deployTimeStr = deployTime.toLocaleDateString("en-US", {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  timeZone: 'UTC'
+}) + " UTC";
+
+// Helper to format process uptime
+function getUptime() {
+  const uptimeSeconds = process.uptime();
+  const days = Math.floor(uptimeSeconds / (3600 * 24));
+  const hours = Math.floor((uptimeSeconds % (3600 * 24)) / 3600);
+  const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+
+  const parts = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0 || days > 0) parts.push(`${hours}h`);
+  parts.push(`${minutes}m`);
+  return parts.join(" ");
+}
 
 app.get("/", async (req, res) => {
-  const visits = await client.incr("visits");
+  let visits = "N/A";
+  let redisStatus = "DISCONNECTED";
+
+  try {
+    if (client.isOpen) {
+      visits = await client.incr("visits");
+      redisStatus = "CONNECTED";
+    }
+  } catch (error) {
+    console.error("Redis increment failed:", error);
+  }
+
+  const uptimeStr = getUptime();
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -35,7 +72,7 @@ app.get("/", async (req, res) => {
       --text-dark: #71717a;
       --accent: #ffffff;
       --accent-muted: #3f3f46;
-      --pulse-color: #ffffff;
+      --pulse-color: #10b981; /* Green pulse indicating online */
     }
 
     * {
@@ -101,14 +138,14 @@ app.get("/", async (req, res) => {
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--card-border);
+      background: rgba(16, 185, 129, 0.05);
+      border: 1px solid rgba(16, 185, 129, 0.2);
       padding: 0.5rem 1rem;
       border-radius: 100px;
       font-size: 0.85rem;
       font-family: 'Space Grotesk', sans-serif;
-      font-weight: 500;
-      color: var(--text-muted);
+      font-weight: 600;
+      color: #10b981;
     }
 
     .pulse {
@@ -116,34 +153,46 @@ app.get("/", async (req, res) => {
       height: 8px;
       background-color: var(--pulse-color);
       border-radius: 50%;
-      box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7);
-      animation: pulse 1.5s infinite;
+      box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      animation: pulse-animation 1.5s infinite;
     }
 
-    @keyframes pulse {
+    @keyframes pulse-animation {
       0% {
         transform: scale(0.95);
-        box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7);
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
       }
       70% {
         transform: scale(1);
-        box-shadow: 0 0 0 6px rgba(255, 255, 255, 0);
+        box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
       }
       100% {
         transform: scale(0.95);
-        box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
       }
     }
 
-    .grid {
+    .dashboard-row {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+    }
+
+    @media (min-width: 768px) {
+      .dashboard-row {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+
+    .main-grid {
       display: grid;
       grid-template-columns: 1fr;
       gap: 2rem;
     }
 
-    @media (min-width: 768px) {
-      .grid {
-        grid-template-columns: 320px 1fr;
+    @media (min-width: 900px) {
+      .main-grid {
+        grid-template-columns: 1.2fr 0.8fr;
       }
     }
 
@@ -170,15 +219,15 @@ app.get("/", async (req, res) => {
       color: var(--text-muted);
       text-transform: uppercase;
       letter-spacing: 0.1em;
-      margin-bottom: 1rem;
+      margin-bottom: 0.5rem;
       font-family: 'Space Grotesk', sans-serif;
     }
 
     .counter-value {
       font-family: 'Space Grotesk', sans-serif;
-      font-size: 5rem;
+      font-size: 3.5rem;
       font-weight: 700;
-      line-height: 1;
+      line-height: 1.1;
       margin-bottom: 0.5rem;
       letter-spacing: -0.05em;
     }
@@ -223,6 +272,15 @@ app.get("/", async (req, res) => {
       max-width: 650px;
       display: block;
       border-radius: 8px;
+      image-rendering: -webkit-optimize-contrast;
+    }
+
+    @media (max-width: 640px) {
+      .architecture-img {
+        max-width: 100%;
+        min-height: 200px;
+        object-fit: contain;
+      }
     }
 
     /* List of details */
@@ -232,9 +290,35 @@ app.get("/", async (req, res) => {
       gap: 1rem;
     }
 
-    @media (min-width: 600px) {
+    @media (max-width: 640px) {
+      .dashboard-row {
+        grid-template-columns: 1fr;
+      }
+      
+      .counter-value {
+        font-size: 2.5rem;
+      }
+      
+      .counter-title {
+        font-size: 0.75rem;
+      }
+      
+      header {
+        flex-direction: column;
+        gap: 1rem;
+        align-items: flex-start;
+      }
+      
+      h1 {
+        font-size: 1.5rem;
+      }
+      
       .details-list {
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: 1fr;
+      }
+      
+      .main-grid {
+        grid-template-columns: 1fr;
       }
     }
 
@@ -258,6 +342,101 @@ app.get("/", async (req, res) => {
       line-height: 1.4;
     }
 
+    /* Infrastructure list & layout styles */
+    .infra-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .infra-list li {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+
+    .infra-icon {
+      width: 18px;
+      height: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .infra-icon svg {
+      width: 100%;
+      height: 100%;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.5;
+    }
+
+    .meta-section {
+      border-top: 1px solid var(--card-border);
+      padding-top: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .meta-item {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+    }
+
+    .meta-label {
+      color: var(--text-dark);
+    }
+
+    .meta-value {
+      font-family: 'Space Grotesk', sans-serif;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .status-connected {
+      color: #10b981;
+      font-weight: 600;
+    }
+
+    .status-disconnected {
+      color: #ef4444;
+      font-weight: 600;
+    }
+
+    .link-section {
+      margin-top: auto;
+      padding-top: 1rem;
+    }
+
+    .source-link {
+      display: block;
+      width: 100%;
+      text-align: center;
+      background: #ffffff;
+      color: #000000;
+      text-decoration: none;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 0.75rem;
+      border-radius: 8px;
+      transition: background 0.2s ease, transform 0.2s ease;
+    }
+
+    .source-link:hover {
+      background: #e4e4e7;
+      transform: translateY(-1px);
+    }
+
     footer {
       text-align: center;
       margin-top: 2rem;
@@ -274,18 +453,31 @@ app.get("/", async (req, res) => {
       <h1>Atharva's Cloud Lab</h1>
       <div class="status-badge">
         <span class="pulse"></span>
-        <span>PROD ACTIVE</span>
+        <span>ONLINE</span>
       </div>
     </header>
 
-    <div class="grid">
-      <!-- Visit counter card -->
+    <!-- Top Dashboard Metrics Row -->
+    <div class="dashboard-row">
       <div class="card">
-        <span class="counter-title">Analytics</span>
+        <span class="counter-title">Visitors</span>
         <div class="counter-value">${visits}</div>
-        <div class="counter-desc">Total page visits recorded in the Redis cache. This count is incremented atomically on every client request.</div>
+        <div class="counter-desc">Total visits stored in Redis cache. Atomically incremented on each route hit.</div>
       </div>
+      <div class="card">
+        <span class="counter-title">Server Uptime</span>
+        <div class="counter-value">${uptimeStr}</div>
+        <div class="counter-desc">Elapsed time since the application container process was started.</div>
+      </div>
+      <div class="card">
+        <span class="counter-title">Orchestration</span>
+        <div class="counter-value">3</div>
+        <div class="counter-desc">Total active containers (App, Redis, Nginx) running in default bridge network.</div>
+      </div>
+    </div>
 
+    <!-- Main Content Grid -->
+    <div class="main-grid">
       <!-- Architecture Card -->
       <div class="card architecture-card">
         <div class="section-title">
@@ -299,7 +491,7 @@ app.get("/", async (req, res) => {
         <div class="details-list">
           <div class="detail-item">
             <span class="detail-label">1. TLS Gateway</span>
-            <span class="detail-value">Nginx handles HTTPS, proxying requests downstream.</span>
+            <span class="detail-value">Nginx reverse proxy handles SSL handshake and routes traffic.</span>
           </div>
           <div class="detail-item">
             <span class="detail-label">2. App Server</span>
@@ -309,6 +501,88 @@ app.get("/", async (req, res) => {
             <span class="detail-label">3. In-Memory Store</span>
             <span class="detail-value">Redis tracks analytics via atomic increments.</span>
           </div>
+        </div>
+      </div>
+
+      <!-- Infrastructure Card -->
+      <div class="card">
+        <div class="section-title" style="margin-bottom: 1.5rem;">
+          <span>Infrastructure</span>
+        </div>
+
+        <ul class="infra-list">
+          <li>
+            <span class="infra-icon">
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="12" cy="12" r="10"></circle>
+                <circle cx="12" cy="12" r="3"></circle>
+                <line x1="12" y1="2" x2="12" y2="4"></line>
+                <line x1="12" y1="20" x2="12" y2="22"></line>
+                <line x1="2" y1="12" x2="4" y2="12"></line>
+                <line x1="20" y1="12" x2="22" y2="12"></line>
+              </svg>
+            </span>
+            <span>DigitalOcean Droplet</span>
+          </li>
+          <li>
+            <span class="infra-icon">
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M3 6h18v12H3z"></path>
+                <path d="M8 10h2v4H8zM14 10h2v4h-2z"></path>
+                <path d="M6 18h12M9 21h6"></path>
+              </svg>
+            </span>
+            <span>Docker Compose</span>
+          </li>
+          <li>
+            <span class="infra-icon">
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 1l9 5v6c0 6-9 11-9 11s-9-5-9-11V6l9-5z"></path>
+                <line x1="12" y1="8" x2="12" y2="16"></line>
+                <line x1="8" y1="12" x2="16" y2="12"></line>
+              </svg>
+            </span>
+            <span>Let's Encrypt SSL</span>
+          </li>
+          <li>
+            <span class="infra-icon">
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+              </svg>
+            </span>
+            <span>GitHub Actions CI/CD</span>
+          </li>
+          <li>
+            <span class="infra-icon">
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M12 6v6l4 2"></path>
+                <path d="M8 12h8M12 8v8"></path>
+              </svg>
+            </span>
+            <span>UFW + Fail2Ban</span>
+          </li>
+        </ul>
+
+        <div class="meta-section">
+          <div class="meta-item">
+            <span class="meta-label">Version</span>
+            <span class="meta-value">v2.0.0</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">Last Deploy</span>
+            <span class="meta-value">${deployTimeStr}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">Redis Engine</span>
+            <span class="meta-value ${redisStatus === 'CONNECTED' ? 'status-connected' : 'status-disconnected'}">${redisStatus}</span>
+          </div>
+        </div>
+
+        <div class="link-section">
+          <a class="source-link" href="https://github.com/atharvabaodhankar/digitalocean-cloud-lab" target="_blank">
+            View Source →
+          </a>
         </div>
       </div>
     </div>
