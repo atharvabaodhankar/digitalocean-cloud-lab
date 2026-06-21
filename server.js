@@ -13,7 +13,7 @@ app.get("/", async (req, res) => {
   const visits = await client.incr("visits");
 
   res.send(`
-    <h1>Atharva's Server</h1>
+    <h1>Atharva's Server V2</h1>
     <h2>Visit Count: ${visits}</h2>
   `);
 });
